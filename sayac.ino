@@ -7,8 +7,8 @@
 #include "time.h"
 
 // ================== WİFİ VE SMTP AYARLARI ==================
-const char *ssid = "SUPERONLINE_WiFi_AFB0";
-const char *password = "BULUT1553";
+const char *ssid = "SUPERONLINE_WiFi_AFB0"; // buraya wifi ismi yazılacak
+const char *password = "BULUT1553";         // buraya wifi sifresi yazılacak
 
 #define SMTP_HOST "smtp.gmail.com"
 #define SMTP_PORT 465

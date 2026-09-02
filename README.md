@@ -1,0 +1,10 @@
+Akıllı Su Sayacı - ESP32 Fatura Otomasyonu
+
+Mekanik su sayacına dışarıdan eklenen bir IR sensör ile tüketimi takip eden, belirli aralıklarla gerçek tarifeye göre hesaplanmış bir "fatura" e-postası gönderen düşük maliyetli bir gömülü sistem projesi.
+
+
+SİSTEM MİMARİSİ
+
+Su Sayacı → IR Sensör → ESP32 → WiFi → Gmail SMTP → E-posta
+                            ↓
+                      Kalıcı Hafıza (NVS)

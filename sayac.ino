@@ -10,19 +10,19 @@
 #include <Preferences.h> // Kalıcı hafıza için
 
 // ================== WİFİ VE SMTP AYARLARI ==================
-const char *ssid = "SUPERONLINE_WiFi_AFB0";
-const char *password = "BULUT1553";
+const char *ssid = "wifi_ismi";        // buraya wifi ismi yazılacak
+const char *password = "wifi_sifresi"; // buraya wifi sifresi yazılacak
 
 #define SMTP_HOST "smtp.gmail.com"
 #define SMTP_PORT 465
-#define AUTHOR_EMAIL "burcebulut41@gmail.com"
-#define AUTHOR_PASSWORD "oyyxqnrgtcceaogy"
-#define RECIPIENT_EMAIL "burcebulut41@gmail.com"
+#define AUTHOR_EMAIL "gonderici_gmaili"     // gonderıcı kısının maili
+#define AUTHOR_PASSWORD "gmail_uyg_şifresi" // Gmail Uygulama Şifresi
+#define RECIPIENT_EMAIL "alıcı_gmaili"      // alıcı kısının maılı
 
 // ================== ABONE VE SAYAC BILGILERI ==================
-const char *SOZLESME_NO = "AN 16965002-5";
-const char *SAYAC_NO = "2401159816";
-const float VARSAYILAN_ILK_OKUMA_M3 = 276.000; // Hafıza boşsa kullanılacak başlangıç değeri
+const char *SOZLESME_NO = "sozlesme_no";     // Abone sözleşme numarası
+const char *SAYAC_NO = "sayac_seri_no";      // Sayac seri numarası
+const float VARSAYILAN_ILK_OKUMA_M3 = 0.000; // Hafıza boşsa kullanılacak başlangıç değeri
 
 // KALIBRASYON: Sayacın 0,0001 m3 ibresi = 1 tam turda 0.1 Litre su demektir.
 const float LITRE_PER_PULSE = 0.1;
@@ -48,11 +48,11 @@ unsigned long lastEmailTime = 0;
 unsigned long lastPulseTime = 0; // Debounce için
 
 // E-posta gonderme araligi
-// const unsigned long EMAIL_INTERVAL = 30UL * 24UL * 60UL * 60UL * 1000UL;  // 30 gun (GERCEK KULLANIM)
-const unsigned long EMAIL_INTERVAL = 60UL * 1000UL; // TEST ICIN: 1 dakika
+const unsigned long EMAIL_INTERVAL = 30UL * 24UL * 60UL * 60UL * 1000UL; // 30 gun (GERCEK KULLANIM)
+// const unsigned long EMAIL_INTERVAL = 60UL * 1000UL; // TEST ICIN: 1 dakika
 
-float periodStartIndexM3 = 276.000;
-float currentTotalIndexM3 = 276.000;
+float periodStartIndexM3 = 0.0;
+float currentTotalIndexM3 = 0.0;
 
 SMTPSession smtp;
 

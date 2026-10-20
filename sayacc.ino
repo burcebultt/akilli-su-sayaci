@@ -1,169 +1,142 @@
-// AKILLI SU SAYACI - TAM ENTEGRE FATURA SISTEMI (NVS KALICI HAFIZA DESTEKLI)
-// Sensor -> Pals sayma -> m3 hesaplama -> ISKI tarifesine gore TL hesaplama -> E-posta
-//
-// GEREKLI KUTUPHANELER:
-// 1. "ESP Mail Client" by Mobizt
-// 2. Preferences (ESP32 Dahili)
+// AKILLI SU SAYACI - PİLLİ DEEP SLEEP & NVS DESTEKLİ FATURA SİSTEMİ
+// Sensor -> Ext0 Wakeup -> RTC/NVS Pals Sayma -> Fatura Zamanında Wi-Fi & E-posta
 
 #include <WiFi.h>
 #include <ESP_Mail_Client.h>
-#include <Preferences.h> // Kalıcı hafıza için
+#include <Preferences.h>
 
 // ================== WİFİ VE SMTP AYARLARI ==================
-const char *ssid = "wifi_ismi";        // buraya wifi ismi yazılacak
-const char *password = "wifi_sifresi"; // buraya wifi sifresi yazılacak
+const char *ssid = "wifi_ismi";
+const char *password = "wifi_sifresi";
 
 #define SMTP_HOST "smtp.gmail.com"
 #define SMTP_PORT 465
-#define AUTHOR_EMAIL "gonderici_gmaili"     // gonderıcı kısının maili
-#define AUTHOR_PASSWORD "gmail_uyg_şifresi" // Gmail Uygulama Şifresi
-#define RECIPIENT_EMAIL "alıcı_gmaili"      // alıcı kısının maılı
+#define AUTHOR_EMAIL "gonderici_gmaili"
+#define AUTHOR_PASSWORD "gmail_uyg_şifresi"
+#define RECIPIENT_EMAIL "alıcı_gmaili"
 
 // ================== ABONE VE SAYAC BILGILERI ==================
-const char *SOZLESME_NO = "sozlesme_no";     // Abone sözleşme numarası
-const char *SAYAC_NO = "sayac_seri_no";      // Sayac seri numarası
-const float VARSAYILAN_ILK_OKUMA_M3 = 0.000; // Hafıza boşsa kullanılacak başlangıç değeri
-
-// KALIBRASYON: Sayacın 0,0001 m3 ibresi = 1 tam turda 0.1 Litre su demektir.
-const float LITRE_PER_PULSE = 0.1;
+const char *SOZLESME_NO = "sozlesme_no";
+const char *SAYAC_NO = "sayac_seri_no";
+const float VARSAYILAN_ILK_OKUMA_M3 = 263.000;
+const float LITRE_PER_PULSE = 1;
 
 // ================== ISKI GUNCEL BIRIM FIYATLARI VE VERGILER ==================
 const float SU_BIRIM_FIYATI = 41.30;
 const float ATIK_SU_BIRIM_FIYATI = 20.63;
 const float CTV_BIRIM_FIYATI = 4.00;
 const float INSANI_SU_HAKKI_M3 = 2.50;
-
 const float SU_KDV_ORANI = 0.01;
 const float ATIK_SU_KDV_ORANI = 0.10;
 
-// ================== SENSOR, HAFIZA VE ZAMANLAYICI ==================
-#define SENSOR_PIN 4
+#define SENSOR_PIN GPIO_NUM_4 // RTC destekli GPIO pini olmalıdır
 
 Preferences preferences;
 
-volatile unsigned long periodPulseCount = 0;
-int lastSensorState = HIGH;
+// RTC Belleği: Derin uykuda veriler sıfırlanmaz, pil bağlı kaldığı sürece saklanır
+RTC_DATA_ATTR unsigned long periodPulseCount = 0;
+RTC_DATA_ATTR float periodStartIndexM3 = 0.0;
+RTC_DATA_ATTR float currentTotalIndexM3 = 0.0;
 
-unsigned long lastEmailTime = 0;
-unsigned long lastPulseTime = 0; // Debounce için
-
-// E-posta gonderme araligi
-const unsigned long EMAIL_INTERVAL = 30UL * 24UL * 60UL * 60UL * 1000UL; // 30 gun (GERCEK KULLANIM)
-// const unsigned long EMAIL_INTERVAL = 60UL * 1000UL; // TEST ICIN: 1 dakika
-
-float periodStartIndexM3 = 0.0;
-float currentTotalIndexM3 = 0.0;
+// Fatura e-postası gönderme eşiği (Örn: 1000 pals = 100 Litre veya belirli bir zaman periyodu)
+const unsigned long EMAIL_PULSE_THRESHOLD = 1000;
 
 SMTPSession smtp;
-
 void sendHtmlInvoiceEmail(float consumedLitre, unsigned long pulses);
 
-// ================== KURULUM ==================
 void setup()
 {
     Serial.begin(115200);
-    pinMode(SENSOR_PIN, INPUT_PULLUP);
+    delay(500); // Seri port kararlılığı için kısa bekleme
 
-    // --- NVS KALICI HAFIZA OKUMA ---
     preferences.begin("water_meter", false);
-    currentTotalIndexM3 = preferences.getFloat("total_index", VARSAYILAN_ILK_OKUMA_M3);
-    periodStartIndexM3 = currentTotalIndexM3;
 
-    Serial.println("\n==================================================");
-    Serial.print("HAFIZADAN OKUNAN GUNCEL SAYAC INDEKSI: ");
-    Serial.print(currentTotalIndexM3, 3);
-    Serial.println(" m3");
-    Serial.println("==================================================");
+    // Uyandırma sebebini öğren
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
-    Serial.print("WiFi'ye baglaniliyor: ");
-    Serial.println(ssid);
-    WiFi.begin(ssid, password);
-
-    int attempt = 0;
-    while (WiFi.status() != WL_CONNECTED && attempt < 40)
+    if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0)
     {
-        delay(500);
-        Serial.print(".");
-        attempt++;
-    }
+        // Optik sensörden pals geldiği için uyandı!
+        periodPulseCount++;
+        float currentConsumedM3 = (periodPulseCount * LITRE_PER_PULSE) / 1000.0;
+        currentTotalIndexM3 = periodStartIndexM3 + currentConsumedM3;
 
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        Serial.println("\nWiFi baglandi! IP: " + WiFi.localIP().toString());
+        Serial.printf("[PALS GELDİ] Toplam Pals: %lu | Anlık Tüketim: %.3f m3\n", periodPulseCount, currentConsumedM3);
     }
     else
     {
-        Serial.println("\nWiFi baglanamadi, kontrol et.");
+        // Cihaz ilk defa pille açıldı veya reset atıldı
+        currentTotalIndexM3 = preferences.getFloat("total_index", VARSAYILAN_ILK_OKUMA_M3);
+        periodStartIndexM3 = currentTotalIndexM3;
+        periodPulseCount = 0;
+
+        Serial.println("\n==================================================");
+        Serial.print("SİSTEM İLK KEZ BAŞLATILDI. HAFIZADAKİ İNDEKS: ");
+        Serial.print(currentTotalIndexM3, 3);
+        Serial.println(" m3");
+        Serial.println("==================================================");
     }
 
-    Serial.println("Zaman senkronize ediliyor...");
-    configTime(10800, 0, "pool.ntp.org", "time.nist.gov"); // GMT+3 (Turkiye)
-
-    time_t now = time(nullptr);
-    int timeAttempt = 0;
-    while (now < 100000 && timeAttempt < 20)
+    // --- E-POSTA VE FATURA KONTROLÜ ---
+    // Belirlenen pals sayısına ulaşıldıysa Wi-Fi aç, e-posta gönder ve NVS hafızayı güncelle
+    if (periodPulseCount >= EMAIL_PULSE_THRESHOLD)
     {
-        delay(500);
-        Serial.print(".");
-        now = time(nullptr);
-        timeAttempt++;
-    }
-    Serial.println("\nZaman senkronize edildi: " + String(now));
+        Serial.println(">>> Fatura periyodu doldu! Wi-Fi başlatılıyor...");
 
-    lastEmailTime = millis();
+        WiFi.begin(ssid, password);
+        int attempt = 0;
+        while (WiFi.status() != WL_CONNECTED && attempt < 40)
+        {
+            delay(500);
+            Serial.print(".");
+            attempt++;
+        }
+
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            Serial.println("\nWiFi bağlandı! NTP zaman senkronizasyonu yapılıyor...");
+            configTime(10800, 0, "pool.ntp.org", "time.nist.gov");
+            delay(2000);
+
+            float consumedLitre = periodPulseCount * LITRE_PER_PULSE;
+
+            // Fatura e-postasını gönder
+            sendHtmlInvoiceEmail(consumedLitre, periodPulseCount);
+
+            // Kalıcı NVS Flash hafızayı güncelle
+            periodStartIndexM3 = currentTotalIndexM3;
+            preferences.putFloat("total_index", currentTotalIndexM3);
+            periodPulseCount = 0; // Dönemlik palsı sıfırla
+
+            Serial.println("--> Yeni toplam indeks NVS hafızaya kaydedildi.");
+        }
+        else
+        {
+            Serial.println("\nWiFi bağlanamadı! Bir sonraki uyanmada tekrar denenecek.");
+        }
+
+        // Wi-Fi modülünü kapatarak pilden tasarruf et
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+    }
+
+    preferences.end();
+
+    // --- DERİN UYKUYA GEÇİŞ DÜZENLEMESİ ---
+    Serial.println("ESP32 derin uyku moduna geçiyor (Sensör sinyali bekleniyor...)\n");
+
+    // SENSOR_PIN (GPIO 4) LOW seviyesine düştüğünde (sensör ibreyi gördüğünde) ESP32 uyanır
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)SENSOR_PIN, 0);
+
+    // Derin uykuya gir
+    esp_deep_sleep_start();
 }
 
-// ================== ANA DONGU ==================
 void loop()
 {
-    int currentState = digitalRead(SENSOR_PIN);
-
-    // Debounce Koruması (En az 80ms arayla pals kabul et)
-    if (currentState != lastSensorState && (millis() - lastPulseTime > 80))
-    {
-        if (currentState == LOW)
-        {
-            periodPulseCount++;
-            lastPulseTime = millis();
-
-            float currentConsumedM3 = (periodPulseCount * LITRE_PER_PULSE) / 1000.0;
-            currentTotalIndexM3 = periodStartIndexM3 + currentConsumedM3;
-
-            Serial.print("[PALS] Toplam: ");
-            Serial.print(periodPulseCount);
-            Serial.print(" | Donem Tuketimi: ");
-            Serial.print(currentConsumedM3, 3);
-            Serial.print(" m3 | Guncel Indeks: ");
-            Serial.println(currentTotalIndexM3, 3);
-        }
-        lastSensorState = currentState;
-    }
-
-    // Periyot Sonu (Fatura Gönderimi)
-    if (millis() - lastEmailTime >= EMAIL_INTERVAL)
-    {
-        lastEmailTime = millis();
-
-        float consumedLitre = periodPulseCount * LITRE_PER_PULSE;
-
-        Serial.println("\n--------------------------------------------------");
-        Serial.println(">>> DONEM DOLDU! Fatura e-postasi gonderiliyor & Hafiza guncelleniyor...");
-        Serial.println("--------------------------------------------------");
-
-        sendHtmlInvoiceEmail(consumedLitre, periodPulseCount);
-
-        // Hafızayı Güncelle
-        periodStartIndexM3 = currentTotalIndexM3;
-        preferences.putFloat("total_index", currentTotalIndexM3);
-
-        Serial.print("--> Yeni Toplam Indeks Kalici Hafizaya Yazildi: ");
-        Serial.println(currentTotalIndexM3, 3);
-
-        periodPulseCount = 0;
-    }
+    // Deep Sleep mimarisinde loop() tamamen boş kalır.
 }
 
-// ================== HTML FATURA E-POSTASI GONDERIMI ==================
 void sendHtmlInvoiceEmail(float consumedLitre, unsigned long pulses)
 {
     float consumedM3 = consumedLitre / 1000.0;
@@ -224,7 +197,7 @@ void sendHtmlInvoiceEmail(float consumedLitre, unsigned long pulses)
     htmlMsg += "<div class='info-box'>";
     htmlMsg += "<b>Sözleşme No:</b> " + String(SOZLESME_NO) + "<br>";
     htmlMsg += "<b>Sayaç Seri No:</b> " + String(SAYAC_NO) + "<br>";
-    htmlMsg += "<b>ilk Okuma / Son Okuma:</b> " + String(periodStartIndexM3, 3) + " m&sup3; / " + String(sonOkumaM3, 3) + " m&sup3;";
+    htmlMsg += "<b>İlk Okuma / Son Okuma:</b> " + String(periodStartIndexM3, 3) + " m&sup3; / " + String(sonOkumaM3, 3) + " m&sup3;";
     htmlMsg += "</div>";
 
     htmlMsg += "<table>";
